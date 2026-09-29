@@ -9,10 +9,12 @@
 const MODEL = "openai/gpt-oss-120b";
 const API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MAX_TOKENS = 2048; // 한 명분 조건별 판단 + 인용 + 짧은 추론에 충분한 길이
-const REASONING_EFFORT = "low"; // 추론 토큰을 줄여 분당 토큰 한도(8,000)를 아낀다
-// 요청 사이 최소 간격(밀리초). 한 명당 약 1,500~2,000토큰이라 분당 8,000토큰 한도에 맞춰 1분에 4명 정도로 늦춘다.
-// 한도에 닿지 않게 미리 늦추는 것이지 재시도가 아니다.
-const AI_PACE_MS = 15000;
+// 추론 수준. "low"에서는 "평일 저녁 가능"을 "월·수·금 저녁 가능" 조건에 대해 애매로 판단하는 등
+// 포함 관계를 놓쳐서 "medium"으로 올렸다(2026-09-29). 대신 한 명당 토큰이 늘어 요청 간격도 늘렸다.
+const REASONING_EFFORT = "medium";
+// 요청 사이 최소 간격(밀리초). 추론 medium 기준 한 명당 약 2,000~2,500토큰이라 분당 8,000토큰 한도에 맞춰
+// 1분에 3명 정도로 늦춘다. 한도에 닿지 않게 미리 늦추는 것이지 재시도가 아니다.
+const AI_PACE_MS = 20000;
 // 요청 하나에 넣을 지원자 수. 서로 비교하지 않고 독립적으로 판단하도록 한 명씩 보낸다.
 const AI_BATCH_SIZE = 1;
 
@@ -23,25 +25,24 @@ const STORAGE_KEYS = {
   apiKeySlot: "screening.apiKeySlot.v1", // 키 자체가 아니라 저장 위치 이름
 };
 
-// 문항 역할. 외부(AI)로 나가는 것은 REVIEW(심사) 문항의 응답과 STUDENT_ID(입학년도 2자리만)뿐이다.
+// 문항 역할은 "심사"와 "제외" 두 가지만 고를 수 있다(선택지가 많으면 헷갈려서 줄였다).
+// - 심사: AI에 보낸다. 단, 학번 문항(제목에 "학번")은 학번 전체 대신 입학년도 2자리만 보낸다.
+// - 제외: 쓰지 않는다.
+// 이름 문항은 자동으로 찾아 화면 표시에만 쓰고, 역할은 "제외"로 고정해 절대 보내지 않는다.
 const ROLE = {
-  NAME: "name",             // 화면 표시용. 외부로 보내지 않는다.
-  REVIEW: "review",         // 심사 문항. 응답을 그대로 보낸다. 성별·나이도 기본은 여기다.
-  STUDENT_ID: "studentId",  // 심사 문항이지만 학번 전체 대신 입학년도 2자리만 보낸다(예: 20250001 → 25학번).
-  EXCLUDE: "exclude",       // 쓰지 않는다.
+  REVIEW: "review",
+  EXCLUDE: "exclude",
 };
 const ROLE_LABEL = {
-  [ROLE.NAME]: "이름 (표시만)",
   [ROLE.REVIEW]: "심사",
-  [ROLE.STUDENT_ID]: "심사 (학번 → 입학년도만)",
   [ROLE.EXCLUDE]: "제외",
 };
 // AI에 보내는(심사에 쓰는) 역할
-const SENT_ROLES = [ROLE.REVIEW, ROLE.STUDENT_ID];
+const SENT_ROLES = [ROLE.REVIEW];
 
 // 기본 "제외"로 둘 문항: 연락처·이메일·타임스탬프·생년월일·주소
 const EXCLUDE_PATTERN = /타임\s*스탬프|timestamp|연락처|전화|휴대폰|핸드폰|phone|이메일|e-?mail|메일|카톡|카카오|주소|생년월일/i;
-// 학번 문항 추정(기본 "심사 (입학년도만)")
+// 학번 문항 추정(심사일 때 입학년도만 보냄)
 const STUDENT_ID_PATTERN = /학번|student\s*id/i;
 // 이름 문항 추정
 const NAME_PATTERN = /이름|성명|^\s*name\s*$/i;
@@ -344,16 +345,17 @@ function buildHeaders(firstRow) {
   });
 }
 
-// 문항 제목으로 역할을 추정한다. 연락처 등은 제외, 학번은 입학년도만 심사, 첫 이름 문항은 이름, 나머지(성별·나이 포함)는 심사.
+// 문항 제목으로 역할을 추정한다. 연락처 등은 제외, 첫 이름 문항은 이름(제외 고정), 나머지(성별·나이·학번 포함)는 심사.
 function guessRoles(columns) {
   let nameFound = false;
   for (const col of columns) {
+    col.isName = false;
+    col.isStudentId = STUDENT_ID_PATTERN.test(col.title);
     if (EXCLUDE_PATTERN.test(col.title)) {
       col.role = ROLE.EXCLUDE;
-    } else if (STUDENT_ID_PATTERN.test(col.title)) {
-      col.role = ROLE.STUDENT_ID;
-    } else if (!nameFound && NAME_PATTERN.test(col.title)) {
-      col.role = ROLE.NAME;
+    } else if (!nameFound && !col.isStudentId && NAME_PATTERN.test(col.title)) {
+      col.role = ROLE.EXCLUDE;
+      col.isName = true;
       nameFound = true;
     } else {
       col.role = ROLE.REVIEW;
@@ -373,23 +375,20 @@ function entryYearOf(raw) {
   return "";
 }
 
-// AI에 보낼 한 칸의 값. 학번 역할은 입학년도만 보낸다.
+// AI에 보낼 한 칸의 값. 학번 문항은 입학년도만 보낸다.
 function sentValueOf(col, raw) {
-  if (col.role === ROLE.STUDENT_ID) {
+  if (col.isStudentId) {
     const year = entryYearOf(raw);
     return year ? `${year}학번` : "(알 수 없음)";
   }
   return raw || "(무응답)";
 }
 
-// 이름 역할은 한 문항만 가질 수 있다. 다른 문항을 이름으로 바꾸면 기존 이름 문항은 제외로 돌린다.
+// 이름 문항은 바꿀 수 없다(항상 제외 = AI로 보내지 않음).
 function setColumnRole(index, role) {
-  if (role === ROLE.NAME) {
-    for (const col of state.columns) {
-      if (col.role === ROLE.NAME && col.index !== index) col.role = ROLE.EXCLUDE;
-    }
-  }
-  state.columns[index].role = role;
+  const col = state.columns[index];
+  if (col.isName || !Object.values(ROLE).includes(role)) return;
+  col.role = role;
   renderColumns();
 }
 
@@ -688,7 +687,7 @@ const SYSTEM_PROMPT = `너는 동아리 서류 심사를 돕는 보조자다. �
 
 규칙:
 1. 응답에 없는 내용을 추측하지 말 것. 근거가 응답에 없으면 unclear로 둔다.
-2. 애매하면 unclear로 둘 것.
+2. 애매하면 unclear로 둘 것. 단, 응답이 조건을 논리적으로 포함하면 추측이 아니라 근거가 있는 것이므로 met으로 판단한다. 예: 조건 "월·수·금 저녁에 참석할 수 있다"에 응답 "평일 저녁 모두 가능"은 met, 응답 "화·목 저녁만 가능"은 unmet, 응답 "요일에 따라 다름"은 unclear.
 3. 맞춤법, 이름, 학과, 말투, 글의 길이나 성의처럼 조건과 무관한 요소는 판단에서 배제할 것.
 4. 성별·나이·입학년도 문항의 응답은 조건 문장이 그 항목(성별, 나이, 학년·입학년도)을 직접 다룰 때만 참고하고, 그 밖의 조건 판단에는 절대 쓰지 말 것. 다른 응답의 글에서 성별이나 나이를 짐작하지도 말 것.
 5. 근거(quote)는 응답 원문을 한 글자도 바꾸지 말고 그대로 복사할 것. 근거가 없으면 빈 문자열로 둔다.
@@ -756,7 +755,7 @@ function buildPayload(applicant, targets) {
     응답: state.columns
       .filter((c) => SENT_ROLES.includes(c.role))
       .map((c) => ({
-        문항: c.role === ROLE.STUDENT_ID ? `${c.title} (입학년도)` : c.title,
+        문항: c.isStudentId ? `${c.title} (입학년도)` : c.title,
         응답: sentValueOf(c, applicant.answers[c.index]),
       })),
     조건: criteria,
@@ -1068,6 +1067,20 @@ function renderColumns() {
     }
     select.addEventListener("change", () => setColumnRole(col.index, select.value));
     tdRole.append(select);
+    // 역할 옆 짧은 설명: 이름은 표시만, 학번은 입학년도만
+    let note = "";
+    if (col.isName) {
+      select.disabled = true;
+      note = "이름: 화면 표시에만 사용";
+    } else if (col.isStudentId && col.role === ROLE.REVIEW) {
+      note = "AI에는 입학년도만";
+    }
+    if (note) {
+      const small = document.createElement("span");
+      small.className = "role-note";
+      small.textContent = note;
+      tdRole.append(small);
+    }
 
     const tdEx = document.createElement("td");
     tdEx.className = "example";
@@ -1083,7 +1096,7 @@ function renderColumns() {
   }
 
   const review = state.columns.filter((c) => SENT_ROLES.includes(c.role)).length;
-  const hasName = state.columns.some((c) => c.role === ROLE.NAME);
+  const hasName = state.columns.some((c) => c.isName);
   const summary = $("#col-summary");
   if (review === 0) {
     summary.className = "status warn";
@@ -1236,7 +1249,7 @@ function showResultStatus(kind, text) {
 }
 
 function displayName(applicant) {
-  const col = state.columns.find((c) => c.role === ROLE.NAME);
+  const col = state.columns.find((c) => c.isName);
   return col ? applicant.answers[col.index] : "";
 }
 
@@ -1445,7 +1458,7 @@ function renderDetail(visible, evals) {
       el("dt", {}, c.title),
       el("dd", { class: a.answers[c.index] ? "" : "blank" },
         a.answers[c.index] || "(무응답)",
-        c.role === ROLE.STUDENT_ID ? el("span", { class: "hint" }, ` → AI에는 ${sentValueOf(c, a.answers[c.index])}만 보냄`) : null),
+        c.isStudentId ? el("span", { class: "hint" }, ` → AI에는 ${sentValueOf(c, a.answers[c.index])}만 보냄`) : null),
     ])),
   );
 

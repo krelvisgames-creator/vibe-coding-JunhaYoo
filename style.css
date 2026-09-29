@@ -123,8 +123,7 @@ code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
   white-space: nowrap;
 }
 .col-table td.count { white-space: nowrap; color: var(--muted); }
-.col-table tr.role-review td.q,
-.col-table tr.role-studentId td.q { color: var(--accent); }
+.col-table tr.role-review td.q { color: var(--accent); }
 .col-table tr.role-exclude td.q { color: var(--muted); }
 
 select {
@@ -371,3 +370,6 @@ dialog label { display: block; font-size: 0.9rem; margin-bottom: 4px; }
 
 /* 결과 CSV 내보내기 버튼은 오른쪽 끝에 */
 #btn-export { margin-left: auto; }
+
+/* 역할 옆 짧은 설명 */
+.role-note { display: block; font-size: 0.78rem; color: var(--muted); margin-top: 2px; }
