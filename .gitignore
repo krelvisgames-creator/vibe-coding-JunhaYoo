@@ -1,0 +1,11 @@
+# 실제 지원자 데이터는 커밋하지 않는다
+*.csv
+
+# 키 파일은 만들지 않지만, 만들어지더라도 커밋되지 않게
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

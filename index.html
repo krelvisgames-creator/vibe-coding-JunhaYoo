@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>동아리 서류 심사 보드</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-row">
+      <h1>동아리 서류 심사 보드</h1>
+      <button type="button" class="btn" id="btn-key">AI 설정 <span id="key-state" class="key-state"></span></button>
+    </div>
+    <p class="subtitle">구글폼 응답 CSV와 선발 조건으로 통과·보류·탈락을 나누고, 조건별 근거를 확인합니다.</p>
+  </header>
+
+  <main>
+    <!-- 화면 1: 불러오기와 조건 설정 -->
+    <section id="screen-setup" class="screen">
+
+      <!-- 1단계: CSV 불러오기 -->
+      <article class="card" id="step-load">
+        <h2><span class="step-no">1</span> 응답 파일 불러오기</h2>
+        <p class="hint">
+          구글폼 <b>응답 다운로드(.csv)</b>로 받은 zip을 그대로 넣거나, CSV·엑셀(xlsx·xls·xlsm·ods) 파일을 넣으세요.
+          파일은 이 브라우저 안에서만 읽고 어디에도 올리지 않습니다.
+        </p>
+
+        <div class="load-row">
+          <label class="btn primary" for="csv-file">파일 선택</label>
+          <input type="file" id="csv-file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls,.ods,.zip" hidden>
+          <button type="button" class="btn" id="btn-sample">예시 데이터로 해보기</button>
+        </div>
+
+        <div id="drop-zone" class="drop-zone">또는 파일을 이 페이지 아무 곳에나 끌어다 놓으세요</div>
+
+        <p id="load-status" class="status" role="status" aria-live="polite"></p>
+      </article>
+
+      <!-- 2단계: 문항 역할 고르기 -->
+      <article class="card" id="step-columns" hidden>
+        <h2><span class="step-no">2</span> 문항 역할 고르기</h2>
+        <p class="hint">
+          AI를 쓸 때 외부로 보내는 것은 <b>심사</b> 문항의 응답뿐입니다. 성별·나이는 기본으로 심사에 포함되고, 학번은 <b>입학년도 2자리</b>만 보냅니다. 연락처·이메일은 기본으로 <b>제외</b>됩니다.
+          <b>이름</b>은 화면 표시에만 쓰고 보내지 않습니다. 지원자는 <code>A행번호</code>로만 구분합니다.
+        </p>
+        <div class="table-wrap">
+          <table class="col-table">
+            <thead>
+              <tr><th>문항</th><th>역할</th><th>첫 응답 예시</th><th>응답 수</th></tr>
+            </thead>
+            <tbody id="col-rows"></tbody>
+          </table>
+        </div>
+        <p id="col-summary" class="status"></p>
+      </article>
+
+      <!-- 3단계: 선발 조건 -->
+      <article class="card" id="step-criteria">
+        <h2><span class="step-no">3</span> 선발 조건 설정</h2>
+        <p class="hint">
+          조건은 지원서 응답으로 확인할 수 있는 한 문장으로 적으세요. 각 조건은 <b>심사</b> 문항 전체를 보고 판단합니다.
+          조건은 이 브라우저에 자동 저장되고, 다른 CSV를 불러와도 그대로 남습니다.
+        </p>
+
+        <div class="crit-group" data-type="required" data-label="필수 조건"
+             data-placeholder="예: 매주 수요일 저녁 정기 모임에 참석할 수 있다">
+          <h3>필수 조건 <span class="tag required">하나라도 미충족이면 탈락</span></h3>
+          <ul class="crit-list"></ul>
+          <button type="button" class="btn small" data-add="required">+ 필수 조건 추가</button>
+        </div>
+
+        <div class="crit-group" data-type="disqualify" data-label="결격 조건"
+             data-placeholder="예: 이번 학기에 졸업할 예정이다">
+          <h3>결격 조건 <span class="tag disqualify">하나라도 해당하면 탈락</span></h3>
+          <ul class="crit-list"></ul>
+          <button type="button" class="btn small" data-add="disqualify">+ 결격 조건 추가</button>
+        </div>
+
+        <div class="crit-group" data-type="preferred" data-label="우대 조건"
+             data-placeholder="예: 개발 프로젝트를 해 본 경험이 있다">
+          <h3>우대 조건 <span class="tag preferred">기준 개수 이상 충족하면 통과</span></h3>
+          <ul class="crit-list"></ul>
+          <button type="button" class="btn small" data-add="preferred">+ 우대 조건 추가</button>
+          <p class="threshold-row">
+            <label for="threshold">우대 조건 중</label>
+            <input type="number" id="threshold" min="1" max="1" step="1" value="1">
+            <span>개 이상 충족하면 통과 (최대 <span id="threshold-max">0</span>개)</span>
+          </p>
+          <p id="threshold-note" class="hint"></p>
+        </div>
+
+        <p id="crit-summary" class="status"></p>
+        <p id="crit-status" class="status" role="status" aria-live="polite"></p>
+      </article>
+
+      <div class="setup-footer">
+        <button type="button" class="btn primary" id="btn-start" disabled>심사 화면으로 →</button>
+        <p id="start-hint" class="hint"></p>
+      </div>
+    </section>
+
+    <!-- 화면 2: 심사 결과 목록과 상세 -->
+    <section id="screen-results" class="screen" hidden>
+      <div class="results-bar">
+        <button type="button" class="btn" id="btn-back">← 불러오기·조건</button>
+        <div id="filters" class="filters" role="group" aria-label="판정별로 보기"></div>
+        <button type="button" class="btn" id="btn-export">결과 CSV 내보내기</button>
+      </div>
+
+      <details class="card rules" open>
+        <summary>판정 규칙 <span class="hint">(위에서부터 먼저 걸리는 규칙 적용)</span></summary>
+        <ol id="rule-list"></ol>
+        <p class="hint">
+          아직 판단하지 않은 조건은 '애매'로 계산합니다. 조건 문장을 고치면 그 조건의 판단은 다시 해야 합니다.
+          최종 결정은 임원이 합니다. 직접 바꾼 판정이 규칙보다 우선하고 <span class="badge edited">수정</span> 표시가 붙습니다.
+        </p>
+      </details>
+
+      <div class="card ai-bar">
+        <div class="ai-row">
+          <button type="button" class="btn primary" id="btn-ai-all">AI로 빈 판단 채우기</button>
+          <button type="button" class="btn" id="btn-ai-stop" hidden>멈추기</button>
+          <span id="ai-progress" class="hint"></span>
+        </div>
+        <p class="hint">
+          AI(Groq 무료 플랜)는 판단이 비어 있는 조건만 채우고, 임원이 누른 판단은 바꾸지 않습니다.
+          무료 한도(분당 토큰 8,000)에 맞춰 15초 간격으로 한 명씩 보냅니다. 40명이면 10분쯤 걸립니다.
+        </p>
+      </div>
+
+      <p id="result-status" class="status" role="status" aria-live="polite"></p>
+
+      <div class="results-layout">
+        <nav class="card list-pane" aria-label="지원자 목록">
+          <ul id="applicant-list"></ul>
+        </nav>
+        <article class="card detail-pane" id="detail" tabindex="-1"></article>
+      </div>
+    </section>
+  </main>
+
+  <!-- 화면 3: Groq API 키 설정 -->
+  <dialog id="key-dialog" aria-labelledby="key-title">
+    <form method="dialog" id="key-form">
+      <h2 id="key-title">Groq API 키</h2>
+      <p class="hint">
+        <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq Console</a>에서 무료로 만든 API 키를 넣으세요.
+        사용 모델: <code id="model-name"></code>
+      </p>
+      <label for="api-key-input">API 키</label>
+      <input type="password" id="api-key-input" autocomplete="off" spellcheck="false" placeholder="gsk_...">
+      <p id="key-dialog-status" class="status"></p>
+      <ul class="key-notes">
+        <li>키는 이 브라우저에만 저장됩니다. 공용 PC에서는 사용 후 꼭 <b>키 삭제</b>를 누르세요.</li>
+        <li>무료 플랜 한도: 분당 요청 30번, 하루 요청 1,000번, 분당 토큰 8,000개.</li>
+        <li>보내는 것은 심사 문항 응답(성별·나이 포함, 학번은 입학년도만)뿐이고, 이름·연락처·이메일은 보내지 않습니다. Groq는 요청 내용을 기본적으로 보관하지 않지만, 안정성·악용 감시를 위해 최대 30일까지 보관할 수 있습니다.</li>
+      </ul>
+      <div class="dialog-actions">
+        <button type="button" class="btn" id="btn-key-delete">키 삭제</button>
+        <span class="spacer"></span>
+        <button type="submit" class="btn" value="cancel" formnovalidate>닫기</button>
+        <button type="button" class="btn primary" id="btn-key-save">저장</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
